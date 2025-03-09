@@ -1,0 +1,10 @@
+SimpleQueueMailing
+
+To execute:
+	SimpleQueueMailing /path/to/config/file
+
+To show this help screen:
+	SimpleQueueMailing help
+
+To get an examle config:
+	SimpleQueueMailing config
