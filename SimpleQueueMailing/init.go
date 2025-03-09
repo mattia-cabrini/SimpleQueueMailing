@@ -1,7 +1,7 @@
 // Copyright (c) 2023 Mattia Cabrini
 // SPDX-License-Identifier: MIT
 
-package main
+package SimpleQueueMailing
 
 import (
 	"bufio"
@@ -305,7 +305,7 @@ func ExecuteMailing(conf *Config) {
 	}
 }
 
-func main() {
+func App() {
 	printHelp()
 	printSampleConfig()
 
