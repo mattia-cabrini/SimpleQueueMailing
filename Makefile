@@ -6,3 +6,4 @@ build: fmt
 
 fmt:
 	go fmt *.go
+	go fmt SimpleQueueMailing/*.go
