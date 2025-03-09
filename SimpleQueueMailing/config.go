@@ -21,7 +21,9 @@ var sampleConfig string
 const EXT = "noeml"
 
 type Config struct {
-	Sender string `yaml:"Sender"`
+	Sender     string `yaml:"Sender"`
+	SenderName string `yaml:"SenderName"`
+	ReplyTo    string `yaml:"ReplyTo"`
 
 	SmtpServer string `yaml:"SmtpServer"`
 	SmtpPort   int    `yaml:"SmtpPort"`

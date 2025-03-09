@@ -20,7 +20,7 @@ type message struct {
 	Content []byte
 }
 
-func InitMessageFromFile(path string) (m message, err error) {
+func InitMessageFromFile(conf *Config, path string) (m message, err error) {
 	fp, err := os.OpenFile(path, os.O_RDONLY, 0400)
 
 	if err != nil {
@@ -70,11 +70,32 @@ func InitMessageFromFile(path string) (m message, err error) {
 		}
 	}
 
+	fi, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+
+	if m.Header("Date") == "" {
+		m.Headers = append(m.Headers,
+			fmt.Sprintf("Date: %s", fi.ModTime().Format(time.RFC1123Z)),
+		)
+	}
+
+	m.Headers = append(m.Headers, fmt.Sprintf("User-Agent: SimpleQueueMailing"))
+
+	if conf.ReplyTo != "" {
+		m.Headers = append(m.Headers, fmt.Sprintf("Reply-To: %s", conf.ReplyTo))
+	}
+
 	return
 }
 
 func (m *message) PrintTo(conf *Config, w io.Writer) (err error) {
-	_, err = fmt.Fprintf(w, "From: %s\r\n", conf.Sender)
+	if conf.SenderName == "" {
+		_, err = fmt.Fprintf(w, "From: %s\r\n", conf.Sender)
+	} else {
+		_, err = fmt.Fprintf(w, "From: %s <%s>\r\n", conf.SenderName, conf.Sender)
+	}
 	if err != nil {
 		return
 	}
@@ -145,7 +166,7 @@ func CreateMessageFrom(conf *Config) (m message, found bool, err error) {
 	}
 
 	if len(path) > 0 {
-		m, err = InitMessageFromFile(path)
+		m, err = InitMessageFromFile(conf, path)
 		found = true
 
 		if err == nil {

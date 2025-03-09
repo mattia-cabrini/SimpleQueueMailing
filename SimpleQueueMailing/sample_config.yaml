@@ -1,4 +1,6 @@
 Sender: ""
+SenderName: ""
+ReplyTo: ""
 SmtpServer: ""
 SmtpPort: 0
 Password: ""
