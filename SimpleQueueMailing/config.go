@@ -18,7 +18,7 @@ var helper string
 //go:embed sample_config.yaml
 var sampleConfig string
 
-const EXT = "nohtml"
+const EXT = "noeml"
 
 type Config struct {
 	Sender string `yaml:"Sender"`
@@ -92,4 +92,3 @@ func readConfig() (conf Config) {
 
 	return
 }
-

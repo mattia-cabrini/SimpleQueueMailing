@@ -33,7 +33,7 @@ func ExecuteMailing(conf *Config) {
 		if err != nil {
 			utility.Logf(utility.ERROR,
 				"Could not send mail test (tls dial failed) %s - %s",
-				m.Re, err.Error(),
+				m.Re(), err.Error(),
 			)
 			return
 		}
@@ -43,7 +43,7 @@ func ExecuteMailing(conf *Config) {
 			defer utility.Deferrable(conn.Close, nil, nil)
 			utility.Logf(utility.ERROR,
 				"Could not send mail (could not create new client) %s - %s",
-				m.Re, err.Error(),
+				m.Re(), err.Error(),
 			)
 			return
 		}
@@ -53,7 +53,7 @@ func ExecuteMailing(conf *Config) {
 		if err = client.Auth(auth); err != nil {
 			utility.Logf(utility.ERROR,
 				"Could not send mail (plain auth failed) %s - %s",
-				m.Re, err.Error(),
+				m.Re(), err.Error(),
 			)
 			return
 		}
@@ -61,16 +61,16 @@ func ExecuteMailing(conf *Config) {
 		if err = client.Mail(conf.Sender); err != nil {
 			utility.Logf(utility.ERROR,
 				"Could not send mail (set sender failed) %s - %s",
-				m.Re, err.Error(),
+				m.Re(), err.Error(),
 			)
 			return
 		}
 
-		for _, addr := range m.To {
+		for _, addr := range m.To() {
 			if err = client.Rcpt(addr); err != nil {
 				utility.Logf(utility.ERROR,
 					"Could not send mail (set receipient %s failed) %s - %s",
-					addr, m.Re, err.Error(),
+					addr, m.Re(), err.Error(),
 				)
 				return
 			}
@@ -80,15 +80,15 @@ func ExecuteMailing(conf *Config) {
 		if err != nil {
 			utility.Logf(utility.ERROR,
 				"Could not send mail (could not init writer) %s - %s",
-				m.Re, err.Error(),
+				m.Re(), err.Error(),
 			)
 			return
 		}
-		_, err = w.Write(m.Msg(conf))
+		err = m.PrintTo(conf, w)
 		if err != nil {
 			utility.Logf(utility.ERROR,
 				"Could not send mail (could not write message) %s - %s",
-				m.Re, err.Error(),
+				m.Re(), err.Error(),
 			)
 			return
 		}
@@ -96,17 +96,17 @@ func ExecuteMailing(conf *Config) {
 		if err != nil {
 			utility.Logf(utility.ERROR,
 				"Could not send mail (could not close writer) %s - %s",
-				m.Re, err.Error(),
+				m.Re(), err.Error(),
 			)
 			return
 		}
 
-		// err = smtp.SendMail(host, auth, conf.Sender, m.To, m.Msg(conf))
+		// err = smtp.SendMail(host, auth, conf.Sender, m.To(), m.Msg(conf))
 		// if err != nil {
 		// 	utility.Logf(utility.ERROR, "Could not send mail %s - %s", m.Re, err.Error())
 		// 	return
 		// }
-		utility.Logf(utility.WARNING, "Sent mail %s to %v", m.Re, m.To)
+		utility.Logf(utility.WARNING, "Sent mail %s to %v", m.Re(), m.To())
 	}
 }
 

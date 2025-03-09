@@ -6,18 +6,18 @@ package SimpleQueueMailing
 import (
 	"bufio"
 	_ "embed"
+	"errors"
 	"fmt"
 	"github.com/mattia-cabrini/go-utility"
+	"io"
 	"os"
 	"strings"
 	"time"
 )
 
 type message struct {
-	To []string
-	Re string
-
-	Text string
+	Headers []string
+	Content []byte
 }
 
 func InitMessageFromFile(path string) (m message, err error) {
@@ -30,61 +30,96 @@ func InitMessageFromFile(path string) (m message, err error) {
 	defer utility.Deferrable(fp.Close, nil, nil)
 
 	var k = bufio.NewScanner(fp)
-	var intoText = false
 
 	for k.Scan() {
-		line := k.Text()
+		var line string
 
-		if intoText {
-			m.Text = m.Text + k.Text()
-		} else {
-			var tline string
-			if len(line) >= 8 {
-				tline = strings.Trim(line[:8], " ")
-			}
-
-			switch {
-			case line == "":
-				intoText = true
-			case tline == "A":
-				m.To = append(m.To, line[8:])
-			case tline == "Re":
-				m.Re = line[8:]
-			}
+		if line = k.Text(); len(line) == 0 {
+			break
 		}
+
+		m.Headers = append(m.Headers, line)
 	}
 
-	err = k.Err()
+	if err = k.Err(); err != nil {
+		return
+	}
+
+	if _, err = fp.Seek(0, 0); err != nil {
+		return
+	}
+
+	m.Content, err = io.ReadAll(fp)
+
+	if len(m.Content) <= 4 {
+		err = errors.New("file too short")
+		return
+	}
+
+	var target = [4]byte{13, 10, 13, 10}
+	var temp [4]byte
+
+	for i := 3; i < len(m.Content); i++ {
+		for ix, bx := range m.Content[i-3 : i+1] {
+			temp[ix] = bx
+		}
+
+		if temp == target {
+			m.Content = m.Content[i+1:]
+			break
+		}
+	}
 
 	return
 }
 
-func (m *message) Dump() {
-	for _, tox := range m.To {
-		fmt.Printf("To: %s\n", tox)
+func (m *message) PrintTo(conf *Config, w io.Writer) (err error) {
+	_, err = fmt.Fprintf(w, "From: %s\r\n", conf.Sender)
+	if err != nil {
+		return
 	}
 
-	fmt.Printf("\nRe: %s\n\n==========\n%s\n==========\n", m.Re, m.Text)
-}
-
-func (m *message) Msg(conf *Config) []byte {
-	var b strings.Builder
-
-	fmt.Fprintf(&b, "From: %s\r\n", conf.Sender)
-
-	for i, tox := range m.To {
-		if i > 0 {
-			fmt.Fprintf(&b, "; %s", tox)
-		} else {
-			fmt.Fprintf(&b, "To: %s", tox)
+	for _, hx := range m.Headers {
+		_, err = fmt.Fprintf(w, "%s\r\n", hx)
+		if err != nil {
+			return
 		}
 	}
-	fmt.Fprintf(&b, "\r\n")
-	fmt.Fprintf(&b, "Subject: %s\r\n", m.Re)
-	// fmt.Fprintf(&b, "Content-type: text/plain")
 
-	fmt.Fprintf(&b, "\r\n%s", m.Text)
-	return []byte(b.String())
+	_, err = fmt.Fprintf(w, "\r\n")
+	if err != nil {
+		return
+	}
+
+	// appending EML...
+	_, err = w.Write(m.Content)
+	return
+}
+
+func (m *message) Header(name string) (value string) {
+	for _, hx := range m.Headers {
+		if len(hx) < len(name) {
+			continue
+		}
+
+		if hx[:len(name)] == name {
+			value = hx[len(name)+1:] // considering trailing ':'
+			value = strings.TrimLeft(value, " ")
+			break
+		}
+	}
+
+	return
+}
+
+func (m *message) Re() string {
+	return m.Header("Subject")
+}
+
+func (m *message) To() (tos []string) {
+	toH := m.Header("To")
+	tos = strings.Split(toH, ";")
+	return
 }
 
 func CreateMessageFrom(conf *Config) (m message, found bool, err error) {
@@ -121,4 +156,3 @@ func CreateMessageFrom(conf *Config) (m message, found bool, err error) {
 
 	return
 }
-
