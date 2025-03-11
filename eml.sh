@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Copyright (c) 2025 Mattia Cabrini
+# SPDX-License-Identifier: MIT
+
 print_header() {
 	printf "%s: %s\r\n" "$1" "$2"
 }
