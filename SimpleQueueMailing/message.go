@@ -138,8 +138,27 @@ func (m *message) Re() string {
 }
 
 func (m *message) To() (tos []string) {
-	toH := m.Header("To")
-	tos = strings.Split(toH, ";")
+	ToH := strings.TrimSpace(m.Header("To"))
+	TOH := strings.TrimSpace(m.Header("TO"))
+	CcH := strings.TrimSpace(m.Header("Cc"))
+	CCH := strings.TrimSpace(m.Header("CC"))
+
+	if ToH != "" {
+		tos = append(tos, strings.Split(ToH, ",")...)
+	}
+
+	if TOH != "" {
+		tos = append(tos, strings.Split(TOH, ",")...)
+	}
+
+	if CcH != "" {
+		tos = append(tos, strings.Split(CcH, ",")...)
+	}
+
+	if CCH != "" {
+		tos = append(tos, strings.Split(CCH, ",")...)
+	}
+
 	return
 }
 
