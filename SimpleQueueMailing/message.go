@@ -1,4 +1,4 @@
-// Copyright (c) 2023 Mattia Cabrini
+// Copyright (c) 2026 Mattia Cabrini
 // SPDX-License-Identifier: MIT
 
 package SimpleQueueMailing
@@ -8,11 +8,12 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
-	"github.com/mattia-cabrini/go-utility"
 	"io"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/mattia-cabrini/go-utility"
 )
 
 type message struct {
@@ -60,9 +61,7 @@ func InitMessageFromFile(conf *Config, path string) (m message, err error) {
 	var temp [4]byte
 
 	for i := 3; i < len(m.Content); i++ {
-		for ix, bx := range m.Content[i-3 : i+1] {
-			temp[ix] = bx
-		}
+		copy(temp[:], m.Content[i-3:i+1])
 
 		if temp == target {
 			m.Content = m.Content[i+1:]
@@ -81,7 +80,7 @@ func InitMessageFromFile(conf *Config, path string) (m message, err error) {
 		)
 	}
 
-	m.Headers = append(m.Headers, fmt.Sprintf("User-Agent: SimpleQueueMailing"))
+	m.Headers = append(m.Headers, "User-Agent: SimpleQueueMailing")
 
 	if conf.ReplyTo != "" {
 		m.Headers = append(m.Headers, fmt.Sprintf("Reply-To: %s", conf.ReplyTo))
@@ -118,14 +117,15 @@ func (m *message) PrintTo(conf *Config, w io.Writer) (err error) {
 }
 
 func (m *message) Header(name string) (value string) {
+	prefix := name + ":" // a header line must be "<name>:<value>"
+
 	for _, hx := range m.Headers {
-		if len(hx) < len(name) {
+		if len(hx) < len(prefix) {
 			continue
 		}
 
-		if hx[:len(name)] == name {
-			value = hx[len(name)+1:] // considering trailing ':'
-			value = strings.TrimLeft(value, " ")
+		if strings.EqualFold(hx[:len(prefix)], prefix) {
+			value = strings.TrimLeft(hx[len(prefix):], " ")
 			break
 		}
 	}
@@ -138,61 +138,51 @@ func (m *message) Re() string {
 }
 
 func (m *message) To() (tos []string) {
-	ToH := strings.TrimSpace(m.Header("To"))
-	TOH := strings.TrimSpace(m.Header("TO"))
-	CcH := strings.TrimSpace(m.Header("Cc"))
-	CCH := strings.TrimSpace(m.Header("CC"))
-
-	if ToH != "" {
+	// Header is case-insensitive, so "To"/"Cc" already cover any casing.
+	if ToH := strings.TrimSpace(m.Header("To")); ToH != "" {
 		tos = append(tos, strings.Split(ToH, ",")...)
 	}
 
-	if TOH != "" {
-		tos = append(tos, strings.Split(TOH, ",")...)
-	}
-
-	if CcH != "" {
+	if CcH := strings.TrimSpace(m.Header("Cc")); CcH != "" {
 		tos = append(tos, strings.Split(CcH, ",")...)
-	}
-
-	if CCH != "" {
-		tos = append(tos, strings.Split(CCH, ",")...)
 	}
 
 	return
 }
 
-func CreateMessageFrom(conf *Config) (m message, found bool, err error) {
-	var path string
-	var name string
+func CreateMessageFrom(conf *Config) (m message, found bool, name string, path string, err error) {
 	entries, err := os.ReadDir(conf.QueueIn)
+	if err != nil {
+		return
+	}
 
-	if err == nil && len(entries) > 0 {
-		for _, ex := range entries {
-			name = ex.Name()
+	for _, ex := range entries {
+		nx := ex.Name()
 
-			if len(name) < len(EXT) {
-				continue
-			}
-
-			if name[len(name)-len(EXT):] != EXT {
-				continue
-			}
-
-			path = conf.QueueIn + "/" + name
-			break
+		if len(nx) < len(EXT) {
+			continue
 		}
+
+		if nx[len(nx)-len(EXT):] != EXT {
+			continue
+		}
+
+		name = nx
+		path = conf.QueueIn + "/" + nx
+		break
 	}
 
 	if len(path) > 0 {
-		m, err = InitMessageFromFile(conf, path)
 		found = true
-
-		if err == nil {
-			fileOut := fmt.Sprintf("%s/%d_%s", conf.QueueOut, time.Now().UnixNano(), name)
-			err = os.Rename(path, fileOut)
-		}
+		m, err = InitMessageFromFile(conf, path)
 	}
 
 	return
+}
+
+// MoveToQueue moves the file at path into targetDir, keeping the original name
+// prefixed with a timestamp so that names do not collide.
+func MoveToQueue(targetDir, name, path string) error {
+	fileOut := fmt.Sprintf("%s/%d_%s", targetDir, time.Now().UnixNano(), name)
+	return os.Rename(path, fileOut)
 }

@@ -6,3 +6,4 @@ SmtpPort: 0
 Password: ""
 QueueIn: ""
 QueueOut: ""
+QueueRejected: ""

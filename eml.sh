@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright (c) 2025 Mattia Cabrini
+# Copyright (c) 2026 Mattia Cabrini
 # SPDX-License-Identifier: MIT
 
 print_header() {

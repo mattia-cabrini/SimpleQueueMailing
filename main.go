@@ -1,4 +1,4 @@
-// Copyright (c) 2023 Mattia Cabrini
+// Copyright (c) 2026 Mattia Cabrini
 // SPDX-License-Identifier: MIT
 
 package main

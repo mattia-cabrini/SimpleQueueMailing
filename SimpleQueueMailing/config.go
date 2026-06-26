@@ -1,4 +1,4 @@
-// Copyright (c) 2023 Mattia Cabrini
+// Copyright (c) 2026 Mattia Cabrini
 // SPDX-License-Identifier: MIT
 
 package SimpleQueueMailing
@@ -29,8 +29,9 @@ type Config struct {
 	SmtpPort   int    `yaml:"SmtpPort"`
 	Password   string `yaml:"Password"`
 
-	QueueIn  string `yaml:"QueueIn"`
-	QueueOut string `yaml:"QueueOut"`
+	QueueIn       string `yaml:"QueueIn"`
+	QueueOut      string `yaml:"QueueOut"`
+	QueueRejected string `yaml:"QueueRejected"`
 }
 
 func (c *Config) Check() (err error) {
@@ -52,6 +53,14 @@ func (c *Config) Check() (err error) {
 		return errors.New("QueueOut is not a directory")
 	}
 
+	if fi, err = os.Stat(c.QueueRejected); err != nil {
+		return
+	}
+
+	if !fi.IsDir() {
+		return errors.New("QueueRejected is not a directory")
+	}
+
 	return
 }
 
@@ -64,7 +73,7 @@ func printHelp() {
 		return
 	}
 
-	fmt.Printf(helper)
+	fmt.Print(helper)
 	os.Exit(0)
 }
 
@@ -77,7 +86,7 @@ func printSampleConfig() {
 		return
 	}
 
-	fmt.Printf(sampleConfig)
+	fmt.Print(sampleConfig)
 	os.Exit(0)
 }
 
