@@ -4,7 +4,7 @@
 package SimpleQueueMailing
 
 import (
-	"bufio"
+	"bytes"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/mattia-cabrini/go-utility"
@@ -24,51 +25,26 @@ type message struct {
 }
 
 func InitMessageFromFile(conf *Config, path string) (m message, err error) {
-	fp, err := os.OpenFile(path, os.O_RDONLY, 0400)
-
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return
 	}
 
-	defer utility.Deferrable(fp.Close, nil, nil)
-
-	var k = bufio.NewScanner(fp)
-
-	for k.Scan() {
-		var line string
-
-		if line = k.Text(); len(line) == 0 {
-			break
-		}
-
-		m.Headers = append(m.Headers, line)
-	}
-
-	if err = k.Err(); err != nil {
-		return
-	}
-
-	if _, err = fp.Seek(0, 0); err != nil {
-		return
-	}
-
-	m.Content, err = io.ReadAll(fp)
-
-	if len(m.Content) <= 4 {
+	if len(data) <= 4 {
 		err = errors.New("file too short")
 		return
 	}
 
-	var target = [4]byte{13, 10, 13, 10}
-	var temp [4]byte
+	// Headers and body are separated by a blank line; everything before it is
+	// the header block, everything after it is the content.
+	headerBlock, content, _ := bytes.Cut(data, []byte("\r\n\r\n"))
+	m.Content = content
 
-	for i := 3; i < len(m.Content); i++ {
-		copy(temp[:], m.Content[i-3:i+1])
-
-		if temp == target {
-			m.Content = m.Content[i+1:]
+	for line := range strings.SplitSeq(string(headerBlock), "\r\n") {
+		if line == "" {
 			break
 		}
+		m.Headers = append(m.Headers, line)
 	}
 
 	fi, err := os.Stat(path)
@@ -167,7 +143,7 @@ func loadAuthorizedRecipients(path string) (allowed map[string]bool, err error) 
 
 	allowed = make(map[string]bool)
 
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		if line = strings.TrimSpace(line); line != "" {
 			allowed[strings.ToLower(line)] = true
 		}
@@ -198,11 +174,7 @@ func CreateMessageFrom(conf *Config) (m message, found bool, name string, path s
 	for _, ex := range entries {
 		nx := ex.Name()
 
-		if len(nx) < len(EXT) {
-			continue
-		}
-
-		if nx[len(nx)-len(EXT):] != EXT {
+		if !strings.HasSuffix(nx, EXT) {
 			continue
 		}
 
@@ -222,8 +194,40 @@ func CreateMessageFrom(conf *Config) (m message, found bool, name string, path s
 // MoveToQueue moves the file at path into targetDir, keeping the original name
 // prefixed with a timestamp so that names do not collide.
 func MoveToQueue(targetDir, name, path string) error {
-	fileOut := fmt.Sprintf("%s/%d_%s", targetDir, time.Now().UnixNano(), name)
-	return os.Rename(path, fileOut)
+	dst := fmt.Sprintf("%s/%d_%s", targetDir, time.Now().UnixNano(), name)
+
+	// os.Rename cannot move across filesystems (EXDEV, e.g. on BSD when the
+	// queues live on different devices); fall back to copy + remove.
+	if err := os.Rename(path, dst); err == nil || !errors.Is(err, syscall.EXDEV) {
+		return err
+	}
+
+	if err := copyFile(path, dst); err != nil {
+		return err
+	}
+
+	return os.Remove(path)
+}
+
+// copyFile copies the contents of src into a freshly created dst.
+func copyFile(src, dst string) (err error) {
+	in, err := os.Open(src)
+	if err != nil {
+		return
+	}
+	defer utility.Deferrable(in.Close, nil, nil)
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return
+	}
+
+	if _, err = io.Copy(out, in); err != nil {
+		utility.Deferrable(out.Close, nil, nil)
+		return
+	}
+
+	return out.Close()
 }
 
 // fileSHA256 returns the hex-encoded SHA-256 of the file at path.
