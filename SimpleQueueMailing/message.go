@@ -5,7 +5,9 @@ package SimpleQueueMailing
 
 import (
 	"bufio"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -137,6 +139,43 @@ func (m *message) Re() string {
 	return m.Header("Subject")
 }
 
+// recipientsAuthorized reports whether every recipient of the message is
+// allowed to receive it. When the authorized set is empty (AuthorizedRecipients
+// undefined, or an empty file) every recipient is authorized; otherwise a
+// recipient is allowed only if it appears (case-insensitively) in the set.
+func (m *message) recipientsAuthorized(conf *Config) bool {
+	if len(conf.authorizedRecipients) == 0 {
+		return true
+	}
+
+	for _, addr := range m.To() {
+		if !conf.authorizedRecipients[strings.ToLower(strings.TrimSpace(addr))] {
+			return false
+		}
+	}
+
+	return true
+}
+
+// loadAuthorizedRecipients reads the authorized recipients file into a set of
+// lower-cased addresses, ignoring blank lines.
+func loadAuthorizedRecipients(path string) (allowed map[string]bool, err error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+
+	allowed = make(map[string]bool)
+
+	for _, line := range strings.Split(string(data), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			allowed[strings.ToLower(line)] = true
+		}
+	}
+
+	return
+}
+
 func (m *message) To() (tos []string) {
 	// Header is case-insensitive, so "To"/"Cc" already cover any casing.
 	if ToH := strings.TrimSpace(m.Header("To")); ToH != "" {
@@ -185,4 +224,15 @@ func CreateMessageFrom(conf *Config) (m message, found bool, name string, path s
 func MoveToQueue(targetDir, name, path string) error {
 	fileOut := fmt.Sprintf("%s/%d_%s", targetDir, time.Now().UnixNano(), name)
 	return os.Rename(path, fileOut)
+}
+
+// fileSHA256 returns the hex-encoded SHA-256 of the file at path.
+func fileSHA256(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
 }

@@ -32,6 +32,19 @@ type Config struct {
 	QueueIn       string `yaml:"QueueIn"`
 	QueueOut      string `yaml:"QueueOut"`
 	QueueRejected string `yaml:"QueueRejected"`
+
+	// AuthorizedRecipients is the path to a file listing one authorized
+	// recipient per line. If empty (undefined) or pointing to an empty file,
+	// every recipient is authorized; otherwise only the listed ones are.
+	AuthorizedRecipients string `yaml:"AuthorizedRecipients"`
+
+	// Administrator, when set, receives a notification e-mail for every
+	// rejected message.
+	Administrator string `yaml:"Administrator"`
+
+	// authorizedRecipients is the set loaded once from AuthorizedRecipients at
+	// config load time. A nil/empty set means every recipient is authorized.
+	authorizedRecipients map[string]bool
 }
 
 func (c *Config) Check() (err error) {
@@ -100,6 +113,11 @@ func readConfig() (conf Config) {
 
 	err = yaml.Unmarshal(fp, &conf)
 	utility.Mypanic(err)
+
+	if conf.AuthorizedRecipients != "" {
+		conf.authorizedRecipients, err = loadAuthorizedRecipients(conf.AuthorizedRecipients)
+		utility.Mypanic(err)
+	}
 
 	return
 }

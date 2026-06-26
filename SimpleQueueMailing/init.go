@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/mattia-cabrini/go-utility"
 	"net/smtp"
+	"os"
 	"time"
 )
 
@@ -24,13 +25,19 @@ func ExecuteMailing(conf *Config) {
 
 	if err != nil {
 		utility.Logf(utility.ERROR, "Could not read message %s - %s", name, err.Error())
-		reject(conf, name, path)
+		reject(conf, &m, name, path, "could not read message: "+err.Error())
+		return
+	}
+
+	if !m.recipientsAuthorized(conf) {
+		utility.Logf(utility.WARNING, "Message %s has unauthorized recipient(s)", name)
+		reject(conf, &m, name, path, "unauthorized recipient(s)")
 		return
 	}
 
 	if err = sendMessage(conf, &m); err != nil {
 		utility.Logf(utility.ERROR, "Could not send mail %s - %s", m.Re(), err.Error())
-		reject(conf, name, path)
+		reject(conf, &m, name, path, "could not send: "+err.Error())
 		return
 	}
 
@@ -45,9 +52,16 @@ func ExecuteMailing(conf *Config) {
 	utility.Logf(utility.WARNING, "Sent mail %s to %v", m.Re(), m.To())
 }
 
-// reject moves a message that could not be read or sent into the rejected
-// queue, so a poison message stops blocking the rest of the input queue.
-func reject(conf *Config, name string, path string) {
+// reject moves a message that could not be read, is not allowed to be sent, or
+// failed to send into the rejected queue, so a poison message stops blocking
+// the rest of the input queue. If an Administrator is configured, it is also
+// notified about the rejection.
+func reject(conf *Config, m *message, name string, path string, reason string) {
+	sum, err := fileSHA256(path)
+	if err != nil {
+		utility.Logf(utility.ERROR, "Could not hash rejected message %s - %s", name, err.Error())
+	}
+
 	if err := MoveToQueue(conf.QueueRejected, name, path); err != nil {
 		utility.Logf(utility.ERROR,
 			"Could not move rejected message %s to the rejected queue - %s",
@@ -56,7 +70,48 @@ func reject(conf *Config, name string, path string) {
 		return
 	}
 
-	utility.Logf(utility.WARNING, "Rejected message %s, moved to the rejected queue", name)
+	utility.Logf(utility.WARNING, "Rejected message %s (%s), moved to the rejected queue", name, reason)
+
+	notifyAdministrator(conf, m, reason, sum)
+}
+
+// notifyAdministrator sends a notification e-mail to conf.Administrator about a
+// rejected message. It is a no-op when no administrator is configured.
+func notifyAdministrator(conf *Config, m *message, reason string, sha string) {
+	if conf.Administrator == "" {
+		return
+	}
+
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = "unknown"
+	}
+
+	now := time.Now().Format(time.RFC1123Z)
+
+	rejectedSubject := ""
+	if m != nil {
+		rejectedSubject = m.Re()
+	}
+
+	notif := message{
+		Headers: []string{
+			"To: " + conf.Administrator,
+			fmt.Sprintf("Subject: SimpleQueueMailing@%s - REJECTED message at %s", hostname, now),
+			"Date: " + now,
+		},
+		Content: []byte(fmt.Sprintf(
+			"A message has been rejected.\r\nSubject: %s\r\nReason: %s\r\nSHA256: %s\r\n",
+			rejectedSubject, reason, sha,
+		)),
+	}
+
+	if err := sendMessage(conf, &notif); err != nil {
+		utility.Logf(utility.ERROR,
+			"Could not notify administrator %s about rejected message %q - %s",
+			conf.Administrator, rejectedSubject, err.Error(),
+		)
+	}
 }
 
 func sendMessage(conf *Config, m *message) (err error) {
