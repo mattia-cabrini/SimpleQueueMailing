@@ -4,6 +4,7 @@ ReplyTo: ""
 SmtpServer: ""
 SmtpPort: 0
 Password: ""
+SmtpInsecureSkipVerify: false
 QueueIn: ""
 QueueOut: ""
 QueueRejected: ""

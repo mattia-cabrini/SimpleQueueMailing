@@ -29,6 +29,11 @@ type Config struct {
 	SmtpPort   int    `yaml:"SmtpPort"`
 	Password   string `yaml:"Password"`
 
+	// SmtpInsecureSkipVerify disables the verification of the SMTP server TLS
+	// certificate. It exposes the connection, and the password sent with PLAIN
+	// auth, to man-in-the-middle attacks: enable it only for testing.
+	SmtpInsecureSkipVerify bool `yaml:"SmtpInsecureSkipVerify"`
+
 	QueueIn       string `yaml:"QueueIn"`
 	QueueOut      string `yaml:"QueueOut"`
 	QueueRejected string `yaml:"QueueRejected"`
@@ -105,7 +110,7 @@ func printSampleConfig() {
 
 func readConfig() (conf Config) {
 	if len(os.Args) != 2 {
-		utility.Logf(utility.FATAL, "wrong arguments")
+		logf(utility.FATAL, "wrong arguments")
 	}
 
 	fp, err := os.ReadFile(os.Args[1])

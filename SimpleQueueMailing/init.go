@@ -18,38 +18,72 @@ func ExecuteMailing(conf *Config) {
 
 	if !found {
 		if err != nil {
-			utility.Logf(utility.ERROR, "Could not scan input queue - %s", err.Error())
+			logf(utility.ERROR, "Could not scan input queue - %s", err.Error())
 		}
 		return
 	}
 
 	if err != nil {
-		utility.Logf(utility.ERROR, "Could not read message %s - %s", name, err.Error())
+		logf(utility.ERROR, "Could not read message %s - %s", name, err.Error())
 		reject(conf, &m, name, path, "could not read message: "+err.Error())
 		return
 	}
 
-	if !m.recipientsAuthorized(conf) {
-		utility.Logf(utility.WARNING, "Message %s has unauthorized recipient(s)", name)
+	rcpts, err := m.To()
+	if err != nil {
+		logf(utility.ERROR, "Message %s has invalid recipient(s) - %s", name, err.Error())
+		reject(conf, &m, name, path, "invalid recipient(s): "+err.Error())
+		return
+	}
+
+	if !recipientsAuthorized(conf, rcpts) {
+		logf(utility.WARNING, "Message %s has unauthorized recipient(s)", name)
 		reject(conf, &m, name, path, "unauthorized recipient(s)")
 		return
 	}
 
 	if err = sendMessage(conf, &m); err != nil {
-		utility.Logf(utility.ERROR, "Could not send mail %s - %s", m.Re(), err.Error())
+		logf(utility.ERROR, "Could not send mail %s - %s", m.Re(), err.Error())
 		reject(conf, &m, name, path, "could not send: "+err.Error())
 		return
 	}
 
 	if err = MoveToQueue(conf.QueueOut, name, path); err != nil {
-		utility.Logf(utility.ERROR,
+		logf(utility.ERROR,
 			"Sent mail %s but could not move it to the output queue - %s",
 			m.Re(), err.Error(),
 		)
+		setAsideSent(conf, name, path)
 		return
 	}
 
-	utility.Logf(utility.WARNING, "Sent mail %s to %v", m.Re(), m.To())
+	logf(utility.WARNING, "Sent mail %s to %v", m.Re(), rcpts)
+}
+
+// setAsideSent gets an already sent message out of the input queue when it
+// could not be moved to the output queue: left there, it would be picked up and
+// sent again on every iteration. It tries the rejected queue first, then renames
+// the file in place so that it no longer ends in EXT; if both fail the program
+// stops, as that is the only way left to prevent duplicate deliveries.
+func setAsideSent(conf *Config, name string, path string) {
+	err := MoveToQueue(conf.QueueRejected, name, path)
+	if err == nil {
+		logf(utility.WARNING, "Sent message %s moved to the rejected queue instead", name)
+		return
+	}
+
+	logf(utility.ERROR, "Could not move sent message %s to the rejected queue - %s", name, err.Error())
+
+	dst := fmt.Sprintf("%s/%d_%s.sent", conf.QueueIn, time.Now().UnixNano(), name)
+	if err = os.Rename(path, dst); err == nil {
+		logf(utility.WARNING, "Sent message %s renamed in place to %s", name, dst)
+		return
+	}
+
+	logf(utility.FATAL,
+		"Could not set aside sent message %s, stopping to avoid sending it again - %s",
+		name, err.Error(),
+	)
 }
 
 // reject moves a message that could not be read, is not allowed to be sent, or
@@ -59,18 +93,18 @@ func ExecuteMailing(conf *Config) {
 func reject(conf *Config, m *message, name string, path string, reason string) {
 	sum, err := fileSHA256(path)
 	if err != nil {
-		utility.Logf(utility.ERROR, "Could not hash rejected message %s - %s", name, err.Error())
+		logf(utility.ERROR, "Could not hash rejected message %s - %s", name, err.Error())
 	}
 
 	if err := MoveToQueue(conf.QueueRejected, name, path); err != nil {
-		utility.Logf(utility.ERROR,
+		logf(utility.ERROR,
 			"Could not move rejected message %s to the rejected queue - %s",
 			name, err.Error(),
 		)
 		return
 	}
 
-	utility.Logf(utility.WARNING, "Rejected message %s (%s), moved to the rejected queue", name, reason)
+	logf(utility.WARNING, "Rejected message %s (%s), moved to the rejected queue", name, reason)
 
 	notifyAdministrator(conf, m, reason, sum)
 }
@@ -107,7 +141,7 @@ func notifyAdministrator(conf *Config, m *message, reason string, sha string) {
 	}
 
 	if err := sendMessage(conf, &notif); err != nil {
-		utility.Logf(utility.ERROR,
+		logf(utility.ERROR,
 			"Could not notify administrator %s about rejected message %q - %s",
 			conf.Administrator, rejectedSubject, err.Error(),
 		)
@@ -115,10 +149,15 @@ func notifyAdministrator(conf *Config, m *message, reason string, sha string) {
 }
 
 func sendMessage(conf *Config, m *message) (err error) {
+	rcpts, err := m.To()
+	if err != nil {
+		return fmt.Errorf("invalid recipients: %w", err)
+	}
+
 	host := fmt.Sprintf("%s:%d", conf.SmtpServer, conf.SmtpPort)
 
 	tlsConfig := &tls.Config{
-		InsecureSkipVerify: true, // Da usare solo in ambiente di test
+		InsecureSkipVerify: conf.SmtpInsecureSkipVerify,
 		ServerName:         conf.SmtpServer,
 	}
 
@@ -143,7 +182,7 @@ func sendMessage(conf *Config, m *message) (err error) {
 		return fmt.Errorf("set sender failed: %w", err)
 	}
 
-	for _, addr := range m.To() {
+	for _, addr := range rcpts {
 		if err = client.Rcpt(addr); err != nil {
 			return fmt.Errorf("set recipient %s failed: %w", addr, err)
 		}
@@ -173,6 +212,10 @@ func App() {
 
 	err := conf.Check()
 	utility.Mypanic(err)
+
+	if conf.SmtpInsecureSkipVerify {
+		logf(utility.WARNING, "SMTP TLS certificate verification is disabled (SmtpInsecureSkipVerify)")
+	}
 
 	for {
 		ExecuteMailing(&conf)

@@ -8,3 +8,8 @@ To show this help screen:
 
 To get an examle config:
 	SimpleQueueMailing config
+
+Files ending in "noeml" are picked up from QueueIn immediately, even while
+they are still being written. Write each message under a temporary name that
+does not end in "noeml" on the same filesystem, then rename it: the rename is
+atomic.

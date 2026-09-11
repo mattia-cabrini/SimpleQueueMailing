@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/mail"
 	"os"
 	"strings"
 	"syscall"
@@ -115,17 +116,18 @@ func (m *message) Re() string {
 	return m.Header("Subject")
 }
 
-// recipientsAuthorized reports whether every recipient of the message is
-// allowed to receive it. When the authorized set is empty (AuthorizedRecipients
-// undefined, or an empty file) every recipient is authorized; otherwise a
-// recipient is allowed only if it appears (case-insensitively) in the set.
-func (m *message) recipientsAuthorized(conf *Config) bool {
+// recipientsAuthorized reports whether every recipient in rcpts (as returned by
+// message.To) is allowed to receive the message. When the authorized set is
+// empty (AuthorizedRecipients undefined, or an empty file) every recipient is
+// authorized; otherwise a recipient is allowed only if it appears
+// (case-insensitively) in the set.
+func recipientsAuthorized(conf *Config, rcpts []string) bool {
 	if len(conf.authorizedRecipients) == 0 {
 		return true
 	}
 
-	for _, addr := range m.To() {
-		if !conf.authorizedRecipients[strings.ToLower(strings.TrimSpace(addr))] {
+	for _, addr := range rcpts {
+		if !conf.authorizedRecipients[strings.ToLower(addr)] {
 			return false
 		}
 	}
@@ -152,14 +154,31 @@ func loadAuthorizedRecipients(path string) (allowed map[string]bool, err error) 
 	return
 }
 
-func (m *message) To() (tos []string) {
+// To returns the bare addresses of every To and Cc recipient, ready for RCPT
+// TO. The headers are parsed as RFC 5322 address lists, so display names are
+// dropped ("Mario Rossi <m@x.it>" yields "m@x.it") and a comma inside a quoted
+// display name ("Rossi, Mario" <m@x.it>) does not split the address. It fails
+// if a header cannot be parsed or if there is no recipient at all.
+func (m *message) To() (tos []string, err error) {
 	// Header is case-insensitive, so "To"/"Cc" already cover any casing.
-	if ToH := strings.TrimSpace(m.Header("To")); ToH != "" {
-		tos = append(tos, strings.Split(ToH, ",")...)
+	for _, h := range []string{"To", "Cc"} {
+		value := strings.TrimSpace(m.Header(h))
+		if value == "" {
+			continue
+		}
+
+		var list []*mail.Address
+		if list, err = mail.ParseAddressList(value); err != nil {
+			return nil, fmt.Errorf("%s header: %w", h, err)
+		}
+
+		for _, a := range list {
+			tos = append(tos, a.Address)
+		}
 	}
 
-	if CcH := strings.TrimSpace(m.Header("Cc")); CcH != "" {
-		tos = append(tos, strings.Split(CcH, ",")...)
+	if len(tos) == 0 {
+		err = errors.New("no recipient")
 	}
 
 	return
