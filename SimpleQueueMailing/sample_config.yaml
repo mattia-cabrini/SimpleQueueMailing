@@ -5,6 +5,9 @@ SmtpServer: ""
 SmtpPort: 0
 Password: ""
 SmtpInsecureSkipVerify: false
+SendPause: 6000
+ServerFaultPauseMin: 1000
+ServerFaultPauseMax: 3600000
 QueueIn: ""
 QueueOut: ""
 QueueRejected: ""

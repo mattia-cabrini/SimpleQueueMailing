@@ -10,6 +10,7 @@ import (
 	"github.com/mattia-cabrini/go-utility"
 	"gopkg.in/yaml.v3"
 	"os"
+	"time"
 )
 
 //go:embed helper.txt
@@ -19,6 +20,13 @@ var helper string
 var sampleConfig string
 
 const EXT = "noeml"
+
+// Defaults, in milliseconds, for the pauses missing from the config file.
+const (
+	defaultSendPause           = 6000    // 6 seconds
+	defaultServerFaultPauseMin = 1000    // 1 second
+	defaultServerFaultPauseMax = 3600000 // 1 hour
+)
 
 type Config struct {
 	Sender     string `yaml:"Sender"`
@@ -33,6 +41,21 @@ type Config struct {
 	// certificate. It exposes the connection, and the password sent with PLAIN
 	// auth, to man-in-the-middle attacks: enable it only for testing.
 	SmtpInsecureSkipVerify bool `yaml:"SmtpInsecureSkipVerify"`
+
+	// SendPause is the pause after every delivery attempt, in milliseconds; it
+	// caps the sending rate. It defaults to defaultSendPause when undefined,
+	// and 0 disables it.
+	SendPause int `yaml:"SendPause"`
+
+	// ServerFaultPauseMin and ServerFaultPauseMax bound the pause, in
+	// milliseconds, before a message is retried after an SMTP server fault
+	// (see errServerFault and serverFaultBackoff): the first pause is
+	// ServerFaultPauseMin, every further consecutive fault doubles it, up to
+	// ServerFaultPauseMax. They default to defaultServerFaultPauseMin and
+	// defaultServerFaultPauseMax when undefined; a minimum of 0 disables the
+	// pause.
+	ServerFaultPauseMin int `yaml:"ServerFaultPauseMin"`
+	ServerFaultPauseMax int `yaml:"ServerFaultPauseMax"`
 
 	QueueIn       string `yaml:"QueueIn"`
 	QueueOut      string `yaml:"QueueOut"`
@@ -54,6 +77,18 @@ type Config struct {
 
 func (c *Config) Check() (err error) {
 	var fi os.FileInfo
+
+	if c.SendPause < 0 {
+		return errors.New("SendPause is negative")
+	}
+
+	if c.ServerFaultPauseMin < 0 {
+		return errors.New("ServerFaultPauseMin is negative")
+	}
+
+	if c.ServerFaultPauseMin > c.ServerFaultPauseMax {
+		return errors.New("ServerFaultPauseMin is greater than ServerFaultPauseMax")
+	}
 
 	if fi, err = os.Stat(c.QueueIn); err != nil {
 		return
@@ -80,6 +115,21 @@ func (c *Config) Check() (err error) {
 	}
 
 	return
+}
+
+// sendPause returns SendPause as a time.Duration.
+func (c *Config) sendPause() time.Duration {
+	return time.Duration(c.SendPause) * time.Millisecond
+}
+
+// serverFaultPauseMin returns ServerFaultPauseMin as a time.Duration.
+func (c *Config) serverFaultPauseMin() time.Duration {
+	return time.Duration(c.ServerFaultPauseMin) * time.Millisecond
+}
+
+// serverFaultPauseMax returns ServerFaultPauseMax as a time.Duration.
+func (c *Config) serverFaultPauseMax() time.Duration {
+	return time.Duration(c.ServerFaultPauseMax) * time.Millisecond
 }
 
 func printHelp() {
@@ -115,6 +165,11 @@ func readConfig() (conf Config) {
 
 	fp, err := os.ReadFile(os.Args[1])
 	fatalIf(err, "Could not read config file "+os.Args[1])
+
+	// Defaults: yaml.Unmarshal leaves fields missing from the file untouched.
+	conf.SendPause = defaultSendPause
+	conf.ServerFaultPauseMin = defaultServerFaultPauseMin
+	conf.ServerFaultPauseMax = defaultServerFaultPauseMax
 
 	err = yaml.Unmarshal(fp, &conf)
 	fatalIf(err, "Could not parse config file "+os.Args[1])

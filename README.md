@@ -20,6 +20,19 @@ display names containing commas (`"Rossi, Mario" <m@x.it>`) are all accepted.
 A message with an unparsable recipient list, or with no recipient at all, is
 moved to `QueueRejected`.
 
+## Sending rate
+
+After every delivery attempt the program pauses for `SendPause` milliseconds
+(default `6000`; `0` disables the pause).
+
+When the SMTP server is unreachable, refuses the login or answers with a
+temporary error, the message stays in `QueueIn` and is retried with an
+exponential backoff: the first pause lasts `ServerFaultPauseMin` milliseconds
+(default `1000`), and every further consecutive fault doubles it, up to
+`ServerFaultPauseMax` (default `3600000`, i.e. 1 hour). As soon as a message is
+sent successfully the pause goes back to the minimum. Every pause is logged as
+a warning.
+
 ## TLS
 
 The SMTP server certificate is verified. `SmtpInsecureSkipVerify: true`

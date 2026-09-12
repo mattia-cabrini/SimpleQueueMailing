@@ -15,22 +15,42 @@ import (
 	"time"
 )
 
-const (
-	// sendPause follows every delivery attempt, so that at most two e-mails
-	// per second are sent.
-	sendPause = 500 * time.Millisecond
-
-	// serverFaultPause follows an SMTP server fault, before retrying.
-	serverFaultPause = 5 * time.Second
-)
-
 // errServerFault marks a sending failure that is not the message's fault: the
 // server is unreachable, dropped the connection, refused the login or sender,
 // or answered with a temporary (4xx) reply. Such a message stays in the input
-// queue and is retried after serverFaultPause.
+// queue and is retried after a growing pause (see serverFaultBackoff).
 var errServerFault = errors.New("SMTP server fault")
 
-func ExecuteMailing(conf *Config) {
+// serverFaultBackoff grows the pause before retrying while the SMTP server
+// keeps failing: ServerFaultPauseMin after the first fault, then twice the
+// previous pause at every further one, capped at ServerFaultPauseMax.
+type serverFaultBackoff struct {
+	faults int           // consecutive server faults
+	pause  time.Duration // pause taken after the latest fault
+}
+
+// next records a server fault and returns the pause to take before retrying.
+func (b *serverFaultBackoff) next(conf *Config) time.Duration {
+	if b.faults == 0 {
+		b.pause = conf.serverFaultPauseMin()
+	} else {
+		b.pause = min(2*b.pause, conf.serverFaultPauseMax())
+	}
+
+	b.faults++
+	return b.pause
+}
+
+// reset forgets past faults once a message has been sent successfully.
+func (b *serverFaultBackoff) reset() {
+	if b.faults > 0 {
+		logf(utility.WARNING, "SMTP server working again after %d fault(s)", b.faults)
+	}
+
+	*b = serverFaultBackoff{}
+}
+
+func ExecuteMailing(conf *Config, backoff *serverFaultBackoff) {
 	m, found, name, path, err := CreateMessageFrom(conf)
 
 	if !found {
@@ -59,20 +79,24 @@ func ExecuteMailing(conf *Config) {
 		return
 	}
 
-	if err = sendMessage(conf, &m); err != nil {
-		if errors.Is(err, errServerFault) {
-			logf(utility.WARNING,
-				"Could not send mail %s, retrying in %v - %s",
-				m.Re(), serverFaultPause, err.Error(),
-			)
-			time.Sleep(serverFaultPause)
-			return
-		}
+	err = sendMessage(conf, &m)
+	if errors.Is(err, errServerFault) {
+		pause := backoff.next(conf)
+		logf(utility.WARNING,
+			"SMTP server fault #%d sending mail %s, pausing %v before retrying - %s",
+			backoff.faults, m.Re(), pause, err.Error(),
+		)
+		time.Sleep(pause)
+		return
+	}
 
+	if err != nil {
 		logf(utility.ERROR, "Could not send mail %s - %s", m.Re(), err.Error())
 		reject(conf, &m, name, path, "could not send: "+err.Error())
 		return
 	}
+
+	backoff.reset()
 
 	if err = MoveToQueue(conf.QueueOut, name, path); err != nil {
 		logf(utility.ERROR,
@@ -182,7 +206,7 @@ func sendMessage(conf *Config, m *message) (err error) {
 
 	// Deferred first, so it runs last: the pause starts once the SMTP session
 	// is closed.
-	defer time.Sleep(sendPause)
+	defer time.Sleep(conf.sendPause())
 
 	host := fmt.Sprintf("%s:%d", conf.SmtpServer, conf.SmtpPort)
 
@@ -272,8 +296,10 @@ func App() {
 		logf(utility.WARNING, "SMTP TLS certificate verification is disabled (SmtpInsecureSkipVerify)")
 	}
 
+	var backoff serverFaultBackoff
+
 	for {
-		ExecuteMailing(&conf)
+		ExecuteMailing(&conf, &backoff)
 		time.Sleep(100 * time.Millisecond)
 	}
 }
