@@ -16,8 +16,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"github.com/mattia-cabrini/go-utility"
 )
 
 type message struct {
@@ -234,7 +232,7 @@ func copyFile(src, dst string) (err error) {
 	if err != nil {
 		return
 	}
-	defer utility.Deferrable(in.Close, nil, nil)
+	defer closeLogged(in.Close, src)
 
 	out, err := os.Create(dst)
 	if err != nil {
@@ -242,7 +240,7 @@ func copyFile(src, dst string) (err error) {
 	}
 
 	if _, err = io.Copy(out, in); err != nil {
-		utility.Deferrable(out.Close, nil, nil)
+		closeLogged(out.Close, dst)
 		return
 	}
 

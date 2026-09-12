@@ -114,14 +114,14 @@ func readConfig() (conf Config) {
 	}
 
 	fp, err := os.ReadFile(os.Args[1])
-	utility.Mypanic(err)
+	fatalIf(err, "Could not read config file "+os.Args[1])
 
 	err = yaml.Unmarshal(fp, &conf)
-	utility.Mypanic(err)
+	fatalIf(err, "Could not parse config file "+os.Args[1])
 
 	if conf.AuthorizedRecipients != "" {
 		conf.authorizedRecipients, err = loadAuthorizedRecipients(conf.AuthorizedRecipients)
-		utility.Mypanic(err)
+		fatalIf(err, "Could not load authorized recipients from "+conf.AuthorizedRecipients)
 	}
 
 	return

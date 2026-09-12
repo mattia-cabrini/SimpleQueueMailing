@@ -6,12 +6,29 @@ package SimpleQueueMailing
 import (
 	"crypto/tls"
 	_ "embed"
+	"errors"
 	"fmt"
 	"github.com/mattia-cabrini/go-utility"
 	"net/smtp"
+	"net/textproto"
 	"os"
 	"time"
 )
+
+const (
+	// sendPause follows every delivery attempt, so that at most two e-mails
+	// per second are sent.
+	sendPause = 500 * time.Millisecond
+
+	// serverFaultPause follows an SMTP server fault, before retrying.
+	serverFaultPause = 5 * time.Second
+)
+
+// errServerFault marks a sending failure that is not the message's fault: the
+// server is unreachable, dropped the connection, refused the login or sender,
+// or answered with a temporary (4xx) reply. Such a message stays in the input
+// queue and is retried after serverFaultPause.
+var errServerFault = errors.New("SMTP server fault")
 
 func ExecuteMailing(conf *Config) {
 	m, found, name, path, err := CreateMessageFrom(conf)
@@ -43,6 +60,15 @@ func ExecuteMailing(conf *Config) {
 	}
 
 	if err = sendMessage(conf, &m); err != nil {
+		if errors.Is(err, errServerFault) {
+			logf(utility.WARNING,
+				"Could not send mail %s, retrying in %v - %s",
+				m.Re(), serverFaultPause, err.Error(),
+			)
+			time.Sleep(serverFaultPause)
+			return
+		}
+
 		logf(utility.ERROR, "Could not send mail %s - %s", m.Re(), err.Error())
 		reject(conf, &m, name, path, "could not send: "+err.Error())
 		return
@@ -154,6 +180,10 @@ func sendMessage(conf *Config, m *message) (err error) {
 		return fmt.Errorf("invalid recipients: %w", err)
 	}
 
+	// Deferred first, so it runs last: the pause starts once the SMTP session
+	// is closed.
+	defer time.Sleep(sendPause)
+
 	host := fmt.Sprintf("%s:%d", conf.SmtpServer, conf.SmtpPort)
 
 	tlsConfig := &tls.Config{
@@ -163,45 +193,71 @@ func sendMessage(conf *Config, m *message) (err error) {
 
 	conn, err := tls.Dial("tcp", host, tlsConfig)
 	if err != nil {
-		return fmt.Errorf("tls dial failed: %w", err)
+		return fmt.Errorf("%w: tls dial failed: %w", errServerFault, err)
 	}
 
 	client, err := smtp.NewClient(conn, conf.SmtpServer)
 	if err != nil {
-		defer utility.Deferrable(conn.Close, nil, nil)
-		return fmt.Errorf("could not create new client: %w", err)
+		closeLogged(conn.Close, "TLS connection to "+host)
+		return fmt.Errorf("%w: could not create new client: %w", errServerFault, err)
 	}
-	defer utility.Deferrable(client.Quit, nil, nil)
+	defer quitSMTP(client, host)
 
+	// Up to MAIL FROM nothing depends on the message, so any failure is the
+	// server's (or the configuration's).
 	auth := smtp.PlainAuth("", conf.Sender, conf.Password, conf.SmtpServer)
 	if err = client.Auth(auth); err != nil {
-		return fmt.Errorf("plain auth failed: %w", err)
+		return fmt.Errorf("%w: plain auth failed: %w", errServerFault, err)
 	}
 
 	if err = client.Mail(conf.Sender); err != nil {
-		return fmt.Errorf("set sender failed: %w", err)
+		return fmt.Errorf("%w: set sender failed: %w", errServerFault, err)
 	}
 
 	for _, addr := range rcpts {
 		if err = client.Rcpt(addr); err != nil {
-			return fmt.Errorf("set recipient %s failed: %w", addr, err)
+			return serverFaultUnlessPermanent(fmt.Errorf("set recipient %s failed: %w", addr, err))
 		}
 	}
 
 	w, err := client.Data()
 	if err != nil {
-		return fmt.Errorf("could not init writer: %w", err)
+		return serverFaultUnlessPermanent(fmt.Errorf("could not init writer: %w", err))
 	}
 
 	if err = m.PrintTo(conf, w); err != nil {
-		return fmt.Errorf("could not write message: %w", err)
+		return serverFaultUnlessPermanent(fmt.Errorf("could not write message: %w", err))
 	}
 
 	if err = w.Close(); err != nil {
-		return fmt.Errorf("could not close writer: %w", err)
+		return serverFaultUnlessPermanent(fmt.Errorf("could not close writer: %w", err))
 	}
 
 	return nil
+}
+
+// serverFaultUnlessPermanent marks err, a failure while transmitting the
+// message, as a server fault unless it is a permanent (5xx) SMTP reply: only
+// that refuses this very message, while a dropped connection or a temporary
+// (4xx) reply is worth retrying.
+func serverFaultUnlessPermanent(err error) error {
+	var reply *textproto.Error
+	if errors.As(err, &reply) && reply.Code >= 500 {
+		return err
+	}
+
+	return fmt.Errorf("%w: %w", errServerFault, err)
+}
+
+// quitSMTP ends the SMTP session. When QUIT fails (e.g. the server already hung
+// up, which surfaces as EOF) net/smtp leaves the connection open, so it is
+// closed explicitly. The failure is only logged: by then the message has
+// already been accepted or refused.
+func quitSMTP(client *smtp.Client, host string) {
+	if err := client.Quit(); err != nil {
+		logf(utility.WARNING, "SMTP QUIT to %s failed, closing the connection - %s", host, err.Error())
+		closeLogged(client.Close, "SMTP connection to "+host)
+	}
 }
 
 func App() {
@@ -210,8 +266,7 @@ func App() {
 
 	conf := readConfig()
 
-	err := conf.Check()
-	utility.Mypanic(err)
+	fatalIf(conf.Check(), "Invalid configuration")
 
 	if conf.SmtpInsecureSkipVerify {
 		logf(utility.WARNING, "SMTP TLS certificate verification is disabled (SmtpInsecureSkipVerify)")
